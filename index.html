@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sobrecarga Gym Tracker</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🏋️‍♂️</text></svg>">
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0c0a09">
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.2/umd/Recharts.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-stone-950 text-stone-100">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { 
+            Dumbbell, ClipboardList, TrendingUp, Calculator, Plus, Trash2,
+            Check, ChevronDown, RotateCcw, Flame, Layers,
+            Timer, Target, Award, Copy, X, Sparkles
+        } = lucide;
+        const {
+            LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, CartesianGrid,
+            Tooltip, Legend, ResponsiveContainer
+        } = Recharts;
+
+        /* ============================== CONSTANTES Y GUARDADO REAL ============================== */
+        const ROUTINE_KEY = 'gymapp:routine:v1';
+        const LOGS_KEY = 'gymapp:logs:v1';
+
+        const MUSCLES = ['Pecho', 'Espalda', 'Piernas', 'Hombro', 'Bíceps', 'Tríceps', 'Core', 'Glúteo'];
+        const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+        const uid = () => Math.random().toString(36).slice(2, 10);
+        const epley1RM = (weight, reps) => weight * (1 + reps / 30);
+        const epleyWeightForReps = (rm, reps) => rm / (1 + (reps - 1) / 30);
+        const round1 = (n) => Math.round(n * 10) / 10;
+
+        const computeSetWeight = (ex, index) => {
+          const base = ex.sets[0];
+          if (index === 0) return base?.weight ?? '';
+          if (base == null || base.weight === '' || base.weight == null) return '';
+          const effReps0 = Number(base.reps) + Number(base.rir);
+          const rm = Number(base.weight) * (1 + (effReps0 - 1) / 30);
+          const s = ex.sets[index];
+          const effReps = Number(s.reps) + Number(s.rir);
+          return round1(epleyWeightForReps(rm, effReps));
+        };
+
+        const DEFAULT_ROUTINE = {
+          id: uid(),
+          name: 'Rutina principal',
+          week: 1,
+          days: [
+            {
+              id: uid(),
+              dayName: 'Lunes',
+              muscles: ['Pecho'],
+              exercises: [
+                {
+                  id: uid(),
+                  name: 'Press banca',
+                  rest: 120,
+                  notes: '',
+                  unit: 'kg',
+                  sets: [
+                    { id: uid(), reps: 6, rir: 0, weight: '' },
+                    { id: uid(), reps: 6, rir: 2, weight: '' },
+                    { id: uid(), reps: 6, rir: 2, weight: '' },
+                    { id: uid(), reps: 8, rir: 1, weight: '' },
+                  ],
+                },
+              ],
+            },
+          ],
+        };
+
+        // CORRECCIÓN AQUÍ: Ahora usa localStorage real para que no se borren tus entrenamientos
+        function useStoredState(key, initial) {
+          const [value, setValue] = useState(() => {
+            try {
+              const saved = localStorage.getItem(key);
+              return saved ? JSON.parse(saved) : initial;
+            } catch (e) {
+              return initial;
+            }
+          });
+
+          useEffect(() => {
+            localStorage.setItem(key, JSON.stringify(value));
+          }, [key, value]);
+
+          return [value, setValue, true];
+        }
+
+        /* ============================== COMPONENTES UI ============================== */
+        const Card = ({ children, className = '' }) => (
+          <div className={`bg-stone-900 border border-stone-800 rounded-xl ${className}`}>{children}</div>
+        );
+
+        const Pill = ({ children, tone = 'default' }) => {
+          const tones = {
+            default: 'bg-stone-800 text-stone-300',
+            amber: 'bg-amber-500/10 text-amber-400 border border-amber-500/30',
+            teal: 'bg-teal-500/10 text-teal-400 border border-teal-500/30',
+          };
+          return (
+            <span className={`px-2 py-0.5 rounded-md text-xs font-medium tracking-wide ${tones[tone]}`}>
+              {children}
+            </span>
+          );
+        };
+
+        const NumInput = ({ value, onChange, className = '', step = 1, min }) => (
+          <input
+            type="number"
+            inputMode="decimal"
+            value={value}
+            step={step}
+            min={min}
+            onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+            className={`bg-stone-950 border border-stone-700 rounded-lg px-2 py-1.5 text-stone-100 font-mono tabular-nums text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500/50 ${className}`}
+          />
+        );
+
+        const MuscleMultiSelect = ({ value, onChange }) => {
+          const [open, setOpen] = useState(false);
+          const list = value || [];
+
+          const toggle = (m) => {
+            if (list.includes(m)) onChange(list.filter((x) => x !== m));
+            else onChange([...list, m]);
+          };
+
+          return (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setOpen((o) => !o)}
+                className="bg-stone-950 border border-stone-700 rounded-lg px-2 py-1.5 text-stone-300 text-sm flex items-center gap-1.5 min-w-[160px] max-w-[220px] justify-between"
+              >
+                <span className="truncate">{list.length ? list.join(', ') : 'Selecciona músculos'}</span>
+                <ChevronDown size={14} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+              </button>
+              {open && (
+                <div className="absolute z-20 mt-1 bg-stone-900 border border-stone-700 rounded-lg p-1.5 shadow-xl w-48 max-h-64 overflow-auto">
+                  {MUSCLES.map((m) => (
+                    <label key={m} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-stone-800 cursor-pointer text-sm text-stone-200">
+                      <input type="checkbox" checked={list.includes(m)} onChange={() => toggle(m)} className="accent-amber-500 w-3.5 h-3.5" />
+                      {m}
+                    </label>
+                  ))}
+                  <button type="button" onClick={() => setOpen(false)} className="mt-1 w-full text-xs text-amber-400 hover:text-amber-300 py-1.5 border-t border-stone-800">
+                    Listo
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        const PlateBar = ({ weight, maxWeight, label, highlight }) => {
+          const pct = maxWeight > 0 ? Math.max(4, (weight / maxWeight) * 100) : 4;
+          const notches = Math.max(1, Math.round(weight / 20));
+          return (
+            <div className="flex items-center gap-3">
+              <div className="w-8 text-right font-mono text-xs text-stone-500 tabular-nums">{label}</div>
+              <div className="flex-1 h-6 bg-stone-950 rounded-md overflow-hidden relative border border-stone-800">
+                <div className={`h-full flex items-center ${highlight ? 'bg-amber-500' : 'bg-stone-700'} transition-all duration-300`} style={{ width: `${pct}%` }}>
+                  {Array.from({ length: Math.min(notches, 20) }).map((_, i) => (
+                    <div key={i} className="h-full w-px bg-stone-950/40 ml-[7px] first:ml-2" />
+                  ))}
+                </div>
+              </div>
+              <div className="w-16 font-mono text-sm text-stone-100 tabular-nums text-right">{round1(weight)} kg</div>
+            </div>
+          );
+        };
+
+        /* ============================== VISTAS DE LA APP ============================== */
+        function RoutineBuilder({ routine, setRoutine }) {
+          const addDay = () => {
+            setRoutine((r) => ({
+              ...r,
+              days: [...r.days, { id: uid(), dayName: 'Lunes', muscles: [MUSCLES[0]], exercises: [] }],
+            }));
+          };
+          const updateDay = (dayId, patch) => {
+            setRoutine((r) => ({
+              ...r,
+              days: r.days.map((d) => (d.id === dayId ? { ...d, ...patch } : d)),
+            }));
+          };
+          const removeDay = (dayId) => {
+            setRoutine((r) => ({ ...r, days: r.days.filter((d) => d.id !== dayId) }));
+          };
+          const duplicateDay = (dayId) => {
+            setRoutine((r) => {
+              const day = r.days.find((d) => d.id === dayId);
+              const clone = {
+                ...day,
+                id: uid(),
+                exercises: day.exercises.map((ex) => ({
+                  ...ex,
+                  id: uid(),
+                  sets: ex.sets.map((s) => ({ ...s, id: uid() })),
+                })),
+              };
+              const idx = r.days.findIndex((d) => d.id === dayId);
+              const days = [...r.days];
+              days.splice(idx + 1, 0, clone);
+              return { ...r, days };
+            });
+          };
+          const addExercise = (dayId) => {
+            updateDayExercises(dayId, (exs) => [
+              ...exs,
+              { id: uid(), name: 'Nuevo ejercicio', rest: 90, notes: '', unit: 'kg', sets: [{ id: uid(), reps: 8, rir: 2, weight: '' }] },
+            ]);
+          };
+          const updateDayExercises = (dayId, updater) => {
+            setRoutine((r) => ({ ...r, days: r.days.map((d) => (d.id === dayId ? { ...d, exercises: updater(d.exercises) } : d)) }));
+          };
+          const updateExercise = (dayId, exId, patch) => {
+            updateDayExercises(dayId, (exs) => exs.map((ex) => (ex.id === exId ? { ...ex, ...patch } : ex)));
+          };
+          const removeExercise = (dayId, exId) => {
+            updateDayExercises(dayId, (exs) => exs.filter((ex) => ex.id !== exId));
+          };
+          const addSet = (dayId, exId) => {
+            updateExerciseSets(dayId, exId, (sets) => [...sets, { id: uid(), reps: 8, rir: 2, weight: '' }]);
+          };
+          const updateExerciseSets = (dayId, exId, updater) => {
+            updateDayExercises(dayId, (exs) => exs.map((ex) => (ex.id === exId ? { ...ex, sets: updater(ex.sets) } : ex)));
+          };
+          const updateSet = (dayId, exId, setId, patch) => {
+            updateExerciseSets(dayId, exId, (sets) => sets.map((s) => (s.id === setId ? { ...s, ...patch } : s)));
+          };
+          const removeSet = (dayId, exId, setId) => {
+            updateExerciseSets(dayId, exId, (sets) => sets.filter((s) => s.id !== setId));
+          };
+
+          return (
+            <div className="space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-bold text-2xl tracking-wide uppercase text-stone-100">Constructor de rutinas</h2>
+                  <p className="text-stone-500 text-sm mt-1">Define días, ejercicios, series objetivo y RIR.</p>
+                </div>
+                <button onClick={addDay} className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold text-sm px-3.5 py-2 rounded-lg transition-colors">
+                  <Plus size={16} /> Día
+                </button>
+              </div>
+              {routine.days.length === 0 && <Card className="p-8 text-center text-stone-500">No hay días programados todavía.</Card>}
+              {routine.days.map((day) => (
+                <Card key={day.id} className="p-4">
+                  <div className="flex flex-wrap items-center gap-2 mb-4">
+                    <select value={day.dayName} onChange={(e) => updateDay(day.id, { dayName: e.target.value })} className="bg-stone-950 border border-stone-700 rounded-lg px-2 py-1.5 text-stone-100 text-sm font-semibold">
+                      {DAYS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <MuscleMultiSelect value={day.muscles} onChange={(muscles) => updateDay(day.id, { muscles })} />
+                    <div className="flex-1" />
+                    <button onClick={() => duplicateDay(day.id)} className="p-2 text-stone-400 hover:text-teal-400"><Copy size={16} /></button>
+                    <button onClick={() => removeDay(day.id)} className="p-2 text-stone-400 hover:text-red-400"><Trash2 size={16} /></button>
+                  </div>
+                  <div className="space-y-3">
+                    {day.exercises.map((ex) => (
+                      <div key={ex.id} className="bg-stone-950/60 border border-stone-800 rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <input value={ex.name} onChange={(e) => updateExercise(day.id, ex.id, { name: e.target.value })} className="flex-1 bg-transparent border-b border-stone-800 text-stone-100 font-medium py-1" placeholder="Nombre" />
+                          <div className="flex items-center gap-1 text-stone-500 text-xs">
+                            <Timer size={13} /><NumInput value={ex.rest} onChange={(v) => updateExercise(day.id, ex.id, { rest: v })} className="w-16" /><span>seg</span>
+                          </div>
+                          <button onClick={() => removeExercise(day.id, ex.id)} className="p-1.5 text-stone-500 hover:text-red-400"><Trash2 size={14} /></button>
+                        </div>
+                        <div className="space-y-1.5">
+                          {ex.sets.map((s, i) => (
+                            <div key={s.id} className="grid grid-cols-4 gap-2 items-center">
+                              <span className="text-xs text-stone-400 font-mono">Serie {i + 1}</span>
+                              {i === 0 ? (
+                                <NumInput value={s.weight ?? ''} onChange={(v) => updateSet(day.id, ex.id, s.id, { weight: v })} placeholder="Peso" step={0.5} />
+                              ) : (
+                                <div class="text-xs text-stone-400 bg-stone-900 p-2 rounded-lg border border-stone-800">Auto</div>
+                              )}
+                              <NumInput value={s.reps} onChange={(v) => updateSet(day.id, ex.id, s.id, { reps: v })} placeholder="Reps" />
+                              <NumInput value={s.rir} onChange={(v) => updateSet(day.id, ex.id, s.id, { rir: v })} placeholder="RIR" />
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => addSet(day.id, ex.id)} className="mt-2 text-xs text-teal-400 flex items-center gap-1"><Plus size={12} /> Serie</button>
+                      </div>
+                    ))}
+                    <button onClick={() => addExercise(day.id)} className="text-sm text-amber-400 flex items-center gap-1"><Plus size={14} /> Ejercicio</button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          );
+        }
+
+        function getLastExerciseRM(logs, exerciseName) {
+          const rows = logs.filter((l) => l.exercise === exerciseName);
+          if (rows.length === 0) return null;
+          const lastDate = rows.reduce((max, r) => (r.date > max ? r.date : max), rows[0].date);
+          const sameDate = rows.filter((r) => r.date === lastDate);
+          return { rm: Math.max(...sameDate.map((r) => r.rm)), date: lastDate };
+        }
+
+        function getISOWeekLabel(dateStr) {
+          const d = new Date(dateStr + 'T00:00:00');
+          const target = new Date(d.valueOf());
+          const dayNr = (d.getDay() + 6) % 7;
+          target.setDate(target.getDate() - dayNr + 3);
+          const firstThursday = new Date(target.getFullYear(), 0, 4);
+          return `${target.getFullYear()}-W${String(1 + Math.round((target - firstThursday) / (7 * 24 * 3600 * 1000))).padStart(2, '0')}`;
+        }
+
+        function TrainingSession({ routine, logs, setLogs }) {
+          const todayDayName = DAYS[(new Date().getDay() + 6) % 7];
+          const [selectedDayName, setSelectedDayName] = useState(todayDayName);
+          const [entries, setEntries] = useState({});
+          const [savedExercises, setSavedExercises] = useState({});
+
+          const matchingDays = useMemo(() => routine.days.filter((d) => d.dayName === selectedDayName), [routine, selectedDayName]);
+
+          const suggestionFor = useCallback((exerciseName, targetReps, targetRir, plannedWeight) => {
+            const last = getLastExerciseRM(logs, exerciseName);
+            if (!last) return plannedWeight !== '' && plannedWeight != null ? round1(Number(plannedWeight)) : null;
+            return round1(epleyWeightForReps(last.rm, Number(targetReps) + Number(targetRir)));
+          }, [logs]);
+
+          useEffect(() => {
+            const prefill = {};
+            matchingDays.forEach((d) => {
+              d.exercises.forEach((ex) => {
+                ex.sets.forEach((s, i) => {
+                  const安全 = suggestionFor(ex.name, s.reps, s.rir, computeSetWeight(ex, i));
+                  prefill[`${ex.id}:${s.id}`] = { weight:安全 != null ?安全 : '', reps: s.reps, rir: s.rir };
+                });
+              });
+            });
+            setEntries(prefill);
+            setSavedExercises({});
+          }, [selectedDayName, matchingDays, suggestionFor]);
+
+          const saveExercise = (dayObj, ex) => {
+            const todayISO = new Date().toISOString().slice(0, 10);
+            const newLogs = [];
+            ex.sets.forEach((s, i) => {
+              const entry = entries[`${ex.id}:${s.id}`];
+              if (!entry || entry.weight === '') return;
+              const w = Number(entry.weight); const r = Number(entry.reps);
+              newLogs.push({
+                id: uid(), date: todayISO, week: routine.week || 1, day: dayObj.dayName, exercise: ex.name,
+                muscle: (dayObj.muscles || []).join(', '), setIndex: i + 1, weight: w, reps: r, rir: Number(entry.rir),
+                rm: round1(epley1RM(w, r)), volume: round1(w * r)
+              });
+            });
+            if (newLogs.length > 0) {
+              setLogs((prev) => [...prev, ...newLogs]);
+              setSavedExercises((s) => ({ ...s, [ex.id]: true }));
+            }
+          };
+
+          return (
+            <div className="space-y-5">
+              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                {DAYS.map((dName) => (
+                  <button key={dName} onClick={() => setSelectedDayName(dName)} className={`px-3 py-2 rounded-lg text-sm font-medium border ${dName === selectedDayName ? 'bg-amber-500 text-stone-950' : 'bg-stone-900 text-stone-300'}`}>
+                    {dName.slice(0,3)}
+                  </button>
+                ))}
+              </div>
+              {matchingDays.length === 0 && <Card className="p-6 text-center text-stone-500">Sin rutina para hoy.</Card>}
+              {matchingDays.map((dayObj) => (
+                <div key={dayObj.id} className="space-y-4">
+                  {dayObj.exercises.map((ex) => {
+                    const last = getLastExerciseRM(logs, ex.name);
+                    return (
+                      <Card key={ex.id} className="p-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <h3 className="font-bold text-lg text-stone-100">{ex.name}</h3>
+                          {last && <Pill tone="teal">Previo: {last.rm}kg</Pill>}
+                        </div>
+                        {ex.sets.map((s, i) => {
+                          const ent = entries[`${ex.id}:${s.id}`] || {};
+                          return (
+                            <div key={s.id} className="grid grid-cols-4 gap-2 mt-2 items-center">
+                              <span className="text-xs text-stone-500 font-mono">Set {i+1}</span>
+                              <NumInput value={ent.weight ?? ''} onChange={(v) => setEntries(e => ({...e, [`${ex.id}:${s.id}`]: {...ent, weight:v}}))} placeholder="Kg" />
+                              <NumInput value={ent.reps ?? ''} onChange={(v) => setEntries(e => ({...e, [`${ex.id}:${s.id}`]: {...ent, reps:v}}))} placeholder="Reps" />
+                              <NumInput value={ent.rir ?? ''} onChange={(v) => setEntries(e => ({...e, [`${ex.id}:${s.id}`]: {...ent, rir:v}}))} placeholder="RIR" />
+                            </div>
+                          );
+                        })}
+                        <button onClick={() => saveExercise(dayObj, ex)} className={`w-full mt-3 py-2 rounded-lg text-sm font-bold ${savedExercises[ex.id] ? 'bg-teal-900 text-teal-300' : 'bg-amber-500 text-stone-950'}`}>
+                          {savedExercises[ex.id] ? '✓ Guardado' : 'Guardar Ejercicio'}
+                        </button>
+                      </Card>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          );
+        }
+
+        /* Generador de historial falso para pruebas en los gráficos */
+        function generateSampleLogs() {
+          const templates = [
+            { name: 'Press banca', muscle: 'Pecho', day: 'Lunes', base: 60, inc: 1.25, sets: [{ reps: 6, rir: 0 }, { reps: 6, rir: 2 }] },
+            { name: 'Sentadilla', muscle: 'Piernas', day: 'Martes', base: 80, inc: 2, sets: [{ reps: 5, rir: 0 }, { reps: 5, rir: 2 }] }
+          ];
+          const logs = []; const today = new Date();
+          for (let w = 1; w <= 10; w++) {
+            const d = new Date(today); d.setDate(d.getDate() - (10 - w) * 7);
+            const dateStr = d.toISOString().slice(0, 10);
+            templates.forEach((t) => {
+              const set1Weight = round1(t.base + (w - 1) * t.inc);
+              t.sets.forEach((s, i) => {
+                logs.push({
+                  id: uid(), date: dateStr, week: w, day: t.day, exercise: t.name, muscle: t.muscle,
+                  setIndex: i + 1, weight: set1Weight, reps: s.reps, rir: s.rir, rm: round1(epley1RM(set1Weight, s.reps)), volume: round1(set1Weight * s.reps)
+                });
+              });
+            });
+          }
+          return logs;
+        }
+
+        function Progress({ logs, setLogs }) {
+          const exerciseNames = useMemo(() => [...new Set(logs.map((l) => l.exercise))], [logs]);
+          const [selected, setSelected] = useState(exerciseNames[0] || '');
+          useEffect(() => { if (!selected && exerciseNames.length > 0) setSelected(exerciseNames[0]); }, [exerciseNames, selected]);
+
+          const weekly = useMemo(() => {
+            const rows = logs.filter((l) => l.exercise === selected);
+            const byWeek = {};
+            rows.forEach((r) => {
+              const wk = getISOWeekLabel(r.date);
+              if (!byWeek[wk]) byWeek[wk] = { week: wk, rm: 0, volume: 0 };
+              byWeek[wk].rm = Math.max(byWeek[wk].rm, r.rm);
+              byWeek[wk].volume += r.volume;
+            });
+            return Object.values(byWeek).sort((a, b) => a.week > b.week ? 1 : -1);
+          }, [logs, selected]);
+
+          if (logs.length === 0) {
+            return (
+              <div className="text-center p-8 space-y-3">
+                <p className="text-stone-500">No hay datos registrados aún.</p>
+                <button onClick={() => setLogs(generateSampleLogs())} className="bg-stone-800 text-stone-200 px-4 py-2 rounded-lg text-sm">Cargar 10 semanas de ejemplo</button>
+              </div>
+            );
+          }
+
+          return (
+            <div className="space-y-4">
+              <select value={selected} onChange={(e) => setSelected(e.target.value)} className="w-full bg-stone-900 p-2 rounded-lg text-stone-200 border border-stone-800">
+                {exerciseNames.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <Card className="p-4">
+                <h3 className="text-sm font-bold text-stone-400 mb-2">Evolución del 1RM Estimado (kg)</h3>
+                <div style={{ width: '100%', height: 200 }}>
+                  <ResponsiveContainer>
+                    <LineChart data={weekly}>
+                      <CartesianGrid stroke="#292524" strokeDasharray="3 3" />
+                      <XAxis dataKey="week" tick={{fill: '#a8a29e', fontSize: 10}} />
+                      <YAxis tick={{fill: '#a8a29e', fontSize: 10}} domain={['auto', 'auto']} />
+                      <Tooltip contentStyle={{ background: '#1c1917', border: '1px solid #44403c' }} />
+                      <Line type="monotone" dataKey="rm" stroke="#f59e0b" strokeWidth={2} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            </div>
+          );
+        }
+
+        function EpleyCalculator() {
+          const [weight, setWeight] = useState(100); const [reps, setReps] = useState(6);
+          const rm = weight && reps ? epley1RM(Number(weight), Number(reps)) : 0;
+          return (
+            <Card className="p-4 space-y-4">
+              <h2 className="font-bold text-lg text-amber-400">Calculadora 1RM</h2>
+              <div className="flex gap-4">
+                <div class="flex-1"><label className="text-xs text-stone-500 block">Peso (kg)</label><NumInput value={weight} onChange={setWeight} class="w-full"/></div>
+                <div class="flex-1"><label className="text-xs text-stone-500 block">Reps</label><NumInput value={reps} onChange={setReps} class="w-full"/></div>
+              </div>
+              <div className="text-center bg-stone-950 p-4 rounded-xl border border-stone-800">
+                <div className="text-xs text-stone-400">Tu Máximo Estimado (1RM)</div>
+                <div className="text-3xl font-black text-amber-500">{round1(rm)} kg</div>
+              </div>
+            </Card>
+          );
+        }
+
+        /* ============================== NAVEGACIÓN PRINCIPAL ============================== */
+        function App() {
+          const [routine, setRoutine] = useStoredState(ROUTINE_KEY, DEFAULT_ROUTINE);
+          const [logs, setLogs] = useStoredState(LOGS_KEY, []);
+          const [tab, setTab] = useState('train');
+
+          return (
+            <div className="min-h-screen max-w-md mx-auto flex flex-col justify-between p-4">
+              <header className="flex justify-between items-center py-2 border-b border-stone-900 mb-4">
+                <div className="flex items-center gap-2">
+                  <Dumbbell className="text-amber-500" />
+                  <h1 className="font-black tracking-wider uppercase text-lg">SOBRECARGA</h1>
+                </div>
+                <span className="text-[10px] bg-stone-900 text-stone-400 px-2 py-1 rounded border border-stone-800">Epley Engine</span>
+              </header>
+
+              <main className="flex-1 pb-20">
+                {tab === 'routine' && <RoutineBuilder routine={routine} setRoutine={setRoutine} />}
+                {tab === 'train' && <TrainingSession routine={routine} logs={logs} setLogs={setLogs} />}
+                {tab === 'progress' && <Progress logs={logs} setLogs={setLogs} />}
+                {tab === 'calc' && <EpleyCalculator />}
+              </main>
+
+              <nav className="fixed bottom-0 left-0 right-0 bg-stone-950 border-t border-stone-900 py-2 flex justify-around max-w-md mx-auto z-50">
+                <button onClick={() => setTab('routine')} className={`flex flex-col items-center text-xs ${tab === 'routine' ? 'text-amber-500' : 'text-stone-500'}`}><ClipboardList size={20} />Rutina</button>
+                <button onClick={() => setTab('train')} className={`flex flex-col items-center text-xs ${tab === 'train' ? 'text-amber-500' : 'text-stone-500'}`}><Dumbbell size={20} />Entrenar</button>
+                <button onClick={() => setTab('progress')} className={`flex flex-col items-center text-xs ${tab === 'progress' ? 'text-amber-500' : 'text-stone-500'}`}><TrendingUp size={20} />Progreso</button>
+                <button onClick={() => setTab('calc')} className={`flex flex-col items-center text-xs ${tab === 'calc' ? 'text-amber-500' : 'text-stone-500'}`}><Calculator size={20} />1RM</button>
+              </nav>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
