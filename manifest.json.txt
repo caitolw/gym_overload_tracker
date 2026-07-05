@@ -1,0 +1,9 @@
+{
+  "short_name": "Sobrecarga",
+  "name": "Sobrecarga Gym Tracker",
+  "start_url": "index.html",
+  "display": "standalone",
+  "theme_color": "#0c0a09",
+  "background_color": "#0c0a09",
+  "orientation": "portrait"
+}
